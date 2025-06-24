@@ -2,7 +2,8 @@
 
 CineWave is a sleek, AI-integrated movie recommendation app built using modern full-stack technologies. Simply type a movie name and get smart suggestions you’ll love. Manage your watchlist, explore trending picks, and enjoy a responsive, animated interface!
 
-![screenshot](https://github.com/nityasrik/movie-recommendor/assets/demo.png) <!-- Replace with actual screenshot path -->
+![screenshot](https://github.com/nityasrik/movie-recommendor/blob/main/assets/demo.png?raw=true)
+
 
 ## 🔥 Features
 
