@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build files
+dist/
+.env
+.DS_Store
+*.local
+.npm
+/public/hot
+/public/storage
+/storage/app/public
+/storage/framework
+/storage/logs
+/vendor
+Homestead.json
+Homestead.yaml
+npm-debug.log
+yarn-error.log
+.idea
+.vscode

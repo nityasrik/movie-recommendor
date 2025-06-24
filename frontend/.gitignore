@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Vite
+.vite/
+vite.config.js.timestamp-*.mjs
+.velite
+
+# Environment variables
+.env
+.env*.local

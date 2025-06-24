@@ -1,102 +1,91 @@
 import pandas as pd
+import requests
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from difflib import get_close_matches
-from tmdb_api import get_movie_data
+import os
 
+OMDB_API_KEY = "80ae224"
 
-# Normalize movie titles for better fuzzy matching
-def normalize(title):
-    return (
-        title.lower()
-        .replace(",", "")
-        .replace(":", "")
-        .replace("-", "")
-        .replace("(", "")
-        .replace(")", "")
-        .strip()
-    )
+app = Flask(__name__)
+CORS(app)
 
+# Get the directory of the script
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Load datasets
-movies = pd.read_csv("data/ml-latest-small/movies.csv")
-tags = pd.read_csv("data/ml-latest-small/tags.csv")
-ratings = pd.read_csv("data/ml-latest-small/ratings.csv")
-links = pd.read_csv("data/ml-latest-small/links.csv")
+# Load data using absolute paths
+movies_path = os.path.join(script_dir, "data/ml-latest-small/movies.csv")
+links_path = os.path.join(script_dir, "data/ml-latest-small/links.csv")
+tags_path = os.path.join(script_dir, "data/ml-latest-small/tags.csv")
+ratings_path = os.path.join(script_dir, "data/ml-latest-small/ratings.csv")
 
-# Clean genres and combine with tags
-movies["genres"] = movies["genres"].fillna("").apply(lambda x: x.replace("|", " "))
+movies = pd.read_csv(movies_path)
+links = pd.read_csv(links_path)
+tags = pd.read_csv(tags_path)
+ratings = pd.read_csv(ratings_path)
+
+# Preprocess
+movies["genres"] = movies["genres"].fillna("").str.replace("|", " ", regex=False)
 tag_data = tags.groupby("movieId")["tag"].apply(lambda x: " ".join(x)).reset_index()
 movies = movies.merge(tag_data, on="movieId", how="left")
 movies["tag"] = movies["tag"].fillna("")
 movies["combined"] = movies["genres"] + " " + movies["tag"]
 
-# Normalize titles
-movies["normalized_title"] = movies["title"].apply(normalize)
-
-# Merge average ratings
-avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
-avg_ratings.columns = ["movieId", "avg_ratings"]
-movies = movies.merge(avg_ratings, on="movieId", how="left")
-
-# Merge tmdbId
-movies = movies.merge(links[["movieId", "tmdbId"]], on="movieId", how="left")
-movies["tmdbId"] = movies["tmdbId"].fillna(0).astype(int)
-
-# TF-IDF Vectorization and Cosine Similarity
+# Content-based filtering
 tfidf = TfidfVectorizer(stop_words="english")
 tfidf_matrix = tfidf.fit_transform(movies["combined"])
 cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
-
-# Title-index map
 indices = pd.Series(movies.index, index=movies["title"]).drop_duplicates()
 
+def get_omdb_poster(imdb_id):
+    if pd.isna(imdb_id):
+        return "/fallback.jpg"
+    url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&i=tt{str(imdb_id).zfill(7)}"
+    try:
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        if data.get("Response") == "True" and data.get("Poster") and data["Poster"] != "N/A":
+            return data["Poster"]
+    except Exception as e:
+        print(f"[OMDb ERROR] {e}")
+    return "/fallback.jpg"
 
-# Get recommendations with fuzzy matching
-def get_recommendations(title, cosine_sim=cosine_sim):
-    clean_title = normalize(title)
-    all_titles = movies["normalized_title"].tolist()
-    match = get_close_matches(clean_title, all_titles, n=1, cutoff=0.5)
-
+def get_recommendations(title):
+    all_titles = movies["title"].tolist()
+    match = get_close_matches(title, all_titles, n=1, cutoff=0.5)
     if not match:
-        print(f"❌ Movie '{title}' not found.")
-        return None, pd.DataFrame()
-
-    actual_title = movies[movies["normalized_title"] == match[0]]["title"].values[0]
-    idx = indices[actual_title]
-    sim_scores = sorted(
-        list(enumerate(cosine_sim[idx])), key=lambda x: x[1], reverse=True
-    )[1:6]
+        return None, []
+    idx = indices[match[0]]
+    sim_scores = sorted(list(enumerate(cosine_sim[idx])), key=lambda x: x[1], reverse=True)[1:11]
     movie_indices = [i[0] for i in sim_scores]
-    return (
-        actual_title,
-        movies.iloc[movie_indices][["title", "genres", "avg_ratings", "tmdbId"]],
-    )
+    recs = []
+    for i in movie_indices:
+        row = movies.iloc[i]
+        link = links[links["movieId"] == row["movieId"]]
+        imdb_id = link["imdbId"].values[0] if not link.empty else None
+        poster = get_omdb_poster(imdb_id)
+        recs.append({
+            "id": int(row["movieId"]),
+            "title": row["title"],
+            "genres": row["genres"],
+            "poster": poster
+        })
+    return match[0], recs
 
+@app.route("/recommend", methods=["GET"])
+def recommend():
+    title = request.args.get("movie_name")
+    if not title:
+        return jsonify({"error": "No movie title provided."}), 400
+    actual_title, recommendations = get_recommendations(title)
+    if not recommendations:
+        return jsonify({"error": "Movie not found."}), 404
+    return jsonify({
+        "searched": actual_title,
+        "recommendations": recommendations
+    })
 
-# 🔍 Search & Display
-user_input = "Titanic"  # Change this to test different inputs
-actual_title, recommendations = get_recommendations(user_input)
-
-if recommendations.empty:
-    exit()
-
-# 🎬 Show the searched movie
-searched_row = movies[movies["title"] == actual_title].iloc[0]
-print(f"\n🎬 You searched for: {actual_title}")
-print(f"⭐ Average User Rating: {searched_row['avg_ratings']:.2f}")
-print(f"🎯 Top 5 Similar Movie Recommendations:\n")
-
-# 🎁 Show recommendations
-for _, row in recommendations.iterrows():
-    if row["tmdbId"] == 0:
-        print(f"🎬 {row['title']}")
-        print(f"⭐ Avg Rating: {row['avg_ratings']:.2f}")
-        print("❌ TMDb data unavailable")
-    else:
-        data = get_movie_data(row["tmdbId"])
-        print(f"🎬 {data['title']}")
-        print(f"⭐ Avg Rating: {row['avg_ratings']:.2f}")
-        print(f"⭐ TMDb Rating: {data['rating']}")
-        print(f"🖼️ Poster: {data['poster']}")
-    print("------")
+if __name__ == "__main__":
+    app.run(debug=True, port=8000)

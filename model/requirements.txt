@@ -1,2 +1,5 @@
 pandas
 scikit-learn
+Flask
+Flask-Cors
+requests
